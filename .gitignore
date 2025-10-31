@@ -1,0 +1,25 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.hash
+*.out
+go.work
+*.tmp
+
+# Go test coverage
+/specs/server-bundled.yaml
+tests/logs
+coverage.html
+
+# Intellij Idea
+.idea
+
+# VSCode
+.vscode/launch.json
+
+vendor
+
+config.yaml

@@ -5,13 +5,13 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 )
 
 const ReadDeadline = 2 * time.Second
 const ReadBufferSize = 4096
+const PrimaryFailureThreshold = 3 // consecutive failures before marking DOWN
 
 type Proxy struct {
 	Cfg Config
@@ -22,6 +22,9 @@ type Proxy struct {
 	primaryDown atomic.Int32
 	downUntilNs atomic.Int64
 
+	// Track consecutive primary failures
+	primaryFailureCount atomic.Int32
+
 	// scoring parsed params
 	initialRTTNs    int64
 	penaltyAddNs    int64
@@ -29,9 +32,6 @@ type Proxy struct {
 	rttEMAAlpha     float64
 
 	rng *rand.Rand
-
-	// mutex to protect fallback addrs slice during init/hot-reload
-	fbMu sync.RWMutex
 }
 
 func NewProxy(cfg Config) *Proxy {
@@ -84,14 +84,33 @@ func (p *Proxy) Listen() *net.UDPConn {
 	return conn
 }
 
+// Mark primary as potentially failed - only mark DOWN after threshold reached
+func (p *Proxy) recordPrimaryFailure() {
+	count := p.primaryFailureCount.Add(1)
+	if count >= PrimaryFailureThreshold {
+		p.markPrimaryDown()
+		log.Printf("[WARN] primary DNS failed %d times, marking DOWN", count)
+	} else {
+		log.Printf("[DEBUG] primary DNS failure %d/%d", count, PrimaryFailureThreshold)
+	}
+}
+
+// Reset failure counter on successful primary query
+func (p *Proxy) recordPrimarySuccess() {
+	if p.primaryFailureCount.Load() > 0 {
+		p.primaryFailureCount.Store(0)
+		log.Println("[INFO] primary DNS recovered, failure count reset")
+	}
+}
+
 func (p *Proxy) Run(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
 	backendAddr := p.chooseBackendAddr()
+	isPrimary := backendAddr.String() == p.PrimaryAddr.String()
 
 	server, err := net.DialUDP("udp", nil, backendAddr)
 	if err != nil {
-		// if primary
-		if backendAddr.String() == p.PrimaryAddr.String() {
-			p.markPrimaryDown()
+		if isPrimary {
+			p.recordPrimaryFailure()
 		} else {
 			// find index and add penalty
 			for i, a := range p.FallbackAddrs {
@@ -108,8 +127,8 @@ func (p *Proxy) Run(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
 	start := time.Now()
 	_, err = server.Write(data)
 	if err != nil {
-		if backendAddr.String() == p.PrimaryAddr.String() {
-			p.markPrimaryDown()
+		if isPrimary {
+			p.recordPrimaryFailure()
 		} else {
 			for i, a := range p.FallbackAddrs {
 				if a.String() == backendAddr.String() {
@@ -130,8 +149,8 @@ func (p *Proxy) Run(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
 		if err != io.EOF {
 			log.Println("read backend:", err)
 		}
-		if backendAddr.String() == p.PrimaryAddr.String() {
-			p.markPrimaryDown()
+		if isPrimary {
+			p.recordPrimaryFailure()
 		} else {
 			for i, a := range p.FallbackAddrs {
 				if a.String() == backendAddr.String() {
@@ -143,8 +162,11 @@ func (p *Proxy) Run(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
 		return
 	}
 
-	// success -> update RTT for fallback
-	if backendAddr.String() != p.PrimaryAddr.String() {
+	// Success!
+	if isPrimary {
+		p.recordPrimarySuccess()
+	} else {
+		// update RTT for fallback
 		for i, a := range p.FallbackAddrs {
 			if a.String() == backendAddr.String() {
 				p.updateRTT(i, rtt)

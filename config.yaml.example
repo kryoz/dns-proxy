@@ -6,5 +6,15 @@ primary:
 
 fallback:
   - host: "85.21.192.5:53"
+    initial_rtt: "20ms"
   - host: "213.234.192.7:53"
+    initial_rtt: "20ms"
   - host: "78.88.8.8:53"
+    initial_rtt: "30ms"
+
+scoring:
+  initial_rtt: "50ms"
+  penalty: 25          # milliseconds added on failure
+  decay: 0.9           # exponential decay coefficient (0.0–1.0)
+  min_rtt: "5ms"       # lower clamp
+  max_rtt: "900ms"     # upper clamp

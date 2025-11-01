@@ -5,73 +5,42 @@ import (
 	dnsproxy "dns-proxy/internal"
 	"flag"
 	"log"
-	"math/rand"
 	"net"
 	"os"
-	"os/signal"
-	"runtime"
-	"syscall"
-	"time"
 )
 
-func Execute() {
-	// CLI params
-	configPath := flag.String("config", "config.yaml", "path to config file")
-	pidFile := flag.String("pid", "", "path to PID file")
-	logFile := flag.String("log", "", "log file path")
-	maxProcs := flag.Int("cpus", 2, "gomaxprocs")
+func Execute(ctx context.Context) {
+	configPath := flag.String("config", "config.yaml", "Path to YAML config")
+	pidFile := flag.String("pid", "/var/run/dns-proxy.pid", "Path to PID file")
+	logFile := flag.String("log", "", "Path to log file (optional)")
 	flag.Parse()
 
-	// logging
 	if *logFile != "" {
-		f, err := os.OpenFile(*logFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+		f, err := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			log.Fatal("Cannot open log file:", err)
+			log.Fatalf("Unable to open log file: %v", err)
 		}
 		log.SetOutput(f)
 	}
 
-	// PID file protection
-	if *pidFile != "" {
-		if err := dnsproxy.CheckAndCreatePID(*pidFile); err != nil {
-			log.Fatal(err)
-			return
-		}
-		defer os.Remove(*pidFile)
-	}
-
-	runtime.GOMAXPROCS(*maxProcs)
-	log.Println("starting DNS Proxy")
-	log.Println("GOMAXPROCS:", *maxProcs)
-
-	ctx, cancel := signal.NotifyContext(
-		context.Background(),
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-	)
-	defer cancel()
-
 	cfg := dnsproxy.LoadConfig(*configPath)
-
-	addr, err := net.ResolveUDPAddr("udp", cfg.Listen)
-	if err != nil {
-		log.Fatal("resolve listen:", err)
+	if err := dnsproxy.CheckAndCreatePID(*pidFile); err != nil {
+		log.Fatalf("PID file error: %v", err)
 	}
 
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		log.Fatal("listen:", err)
-	}
-	defer conn.Close()
+	defer func() {
+		log.Println("Stopping DNS proxy...")
+		dnsproxy.RemovePID(*pidFile)
+	}()
 
-	proxy := dnsproxy.Proxy{
-		Cfg: cfg,
-		Rng: rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
-
-	log.Println("DNS proxy listening on", cfg.Listen)
+	proxy := dnsproxy.NewProxy(cfg)
+	conn := proxy.Listen()
+	defer func(conn *net.UDPConn) {
+		err := conn.Close()
+		if err != nil {
+			log.Printf("error while server shutdown: %v", err)
+		}
+	}(conn)
 
 	for {
 		select {
@@ -80,14 +49,13 @@ func Execute() {
 		default:
 		}
 
-		buf := make([]byte, 512)
+		buf := make([]byte, dnsproxy.ReadBufferSize)
 		n, clientAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			log.Println("read client:", err)
 			continue
 		}
 
-		go proxy.HandlePacket(conn, buf[:n], clientAddr)
+		go proxy.Run(conn, buf[:n], clientAddr)
 	}
-
 }

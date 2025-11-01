@@ -1,7 +1,21 @@
 package main
 
-import "dns-proxy/cmd"
+import (
+	"context"
+	"dns-proxy/cmd"
+	"os/signal"
+	"syscall"
+)
 
 func main() {
-	cmd.Execute()
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+	defer cancel()
+
+	cmd.Execute(ctx)
 }

@@ -29,7 +29,7 @@ func (p *Proxy) computeScore(i int) float64 {
 		decayedPenalty(
 			p.Cfg.Fallback[i].penaltyNs.Load(),
 			p.Cfg.Fallback[i].penaltyAt.Load(),
-			p.penaltyHalfLife,
+			p.Cfg.Scoring.PenaltyHalfLife,
 		)
 }
 
@@ -63,7 +63,7 @@ func (p *Proxy) updateRTT(i int, sample time.Duration) {
 	ptr := &p.Cfg.Fallback[i].rtt
 	for {
 		old := ptr.Load()
-		newVal := int64(float64(old)*p.rttEMAAlpha + float64(sampleNs)*(1.0-p.rttEMAAlpha))
+		newVal := int64(float64(old)*p.Cfg.Scoring.RTTEMAAlpha + float64(sampleNs)*(1.0-p.Cfg.Scoring.RTTEMAAlpha))
 		if ptr.CompareAndSwap(old, newVal) {
 			return
 		}
@@ -73,17 +73,17 @@ func (p *Proxy) updateRTT(i int, sample time.Duration) {
 // add penalty on error
 func (p *Proxy) addPenalty(i int) {
 	now := time.Now().UnixNano()
-	p.Cfg.Fallback[i].penaltyNs.Store(p.penaltyAddNs)
+	p.Cfg.Fallback[i].penaltyNs.Store(int64(p.Cfg.Scoring.PenaltyAdd))
 	p.Cfg.Fallback[i].penaltyAt.Store(now)
 }
 
 // choose backend address (primary or fallback)
 func (p *Proxy) chooseBackendAddr() *net.UDPAddr {
-	if p.primaryDown.Load() == 0 {
+	if p.primaryDown.Load() == false {
 		return p.PrimaryAddr
 	}
 	if time.Now().UnixNano() > p.downUntilNs.Load() {
-		p.primaryDown.Store(0)
+		p.primaryDown.Store(false)
 		return p.PrimaryAddr
 	}
 	// choose best fallback index
@@ -102,7 +102,7 @@ func (p *Proxy) markPrimaryDown() {
 		ttl = 5 * time.Minute
 	}
 	until := time.Now().Add(ttl).UnixNano()
-	p.primaryDown.Store(1)
+	p.primaryDown.Store(true)
 	p.downUntilNs.Store(until)
 	log.Println("[WARN] primary DNS marked DOWN until", time.Unix(0, until))
 }

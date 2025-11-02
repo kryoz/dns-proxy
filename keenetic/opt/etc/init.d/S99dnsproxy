@@ -1,0 +1,13 @@
+#!/bin/sh
+
+ENABLED=yes
+PROCS=dns-proxy-linux-arm64
+PIDFILE="/opt/var/run/dns-proxy.pid"
+ARGS="--log=syslog --config /opt/home/dns-proxy/config.yaml --pid $PIDFILE"
+DESC=$PROCS
+PATH=/opt/sbin:/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/home/dns-proxy
+
+# for go scheduler tuning
+#GOMAXPROCS=4
+
+. /opt/etc/init.d/rc.func

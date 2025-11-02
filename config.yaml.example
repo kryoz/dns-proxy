@@ -1,9 +1,15 @@
 listen: "0.0.0.0:53"
 
+# read timeout
+read_deadline: 2s
+
+# options for primary destination dns server
 primary:
   host: "192.168.0.100:53"
-  down_ttl: "5m"
+  down_ttl: "5m"        # period to use fallback server when primary is down
+  failure_threshold: 3  # consecutive failures before marking primary down
 
+# list of fallback dns servers to use when primary is down
 fallback:
   - host: "85.21.192.5:53"
     initial_rtt: "20ms"

@@ -9,9 +9,7 @@ import (
 	"time"
 )
 
-const ReadDeadline = 2 * time.Second
 const ReadBufferSize = 4096
-const PrimaryFailureThreshold = 3 // consecutive failures before marking DOWN
 
 type Proxy struct {
 	Cfg Config
@@ -19,17 +17,9 @@ type Proxy struct {
 	PrimaryAddr   *net.UDPAddr
 	FallbackAddrs []*net.UDPAddr
 
-	primaryDown atomic.Int32
-	downUntilNs atomic.Int64
-
-	// Track consecutive primary failures
-	primaryFailureCount atomic.Int32
-
-	// scoring parsed params
-	initialRTTNs    int64
-	penaltyAddNs    int64
-	penaltyHalfLife time.Duration
-	rttEMAAlpha     float64
+	primaryDown         atomic.Bool
+	downUntilNs         atomic.Int64
+	primaryFailureCount atomic.Uint32
 
 	rng *rand.Rand
 }
@@ -39,15 +29,6 @@ func NewProxy(cfg Config) *Proxy {
 		Cfg: cfg,
 		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	// parse scoring params
-	initRTT, _ := time.ParseDuration(cfg.Scoring.InitialRTT)
-	penaltyAdd, _ := time.ParseDuration(cfg.Scoring.PenaltyAdd)
-	hl, _ := time.ParseDuration(cfg.Scoring.PenaltyHalfLife)
-
-	p.initialRTTNs = int64(initRTT)
-	p.penaltyAddNs = int64(penaltyAdd)
-	p.penaltyHalfLife = hl
-	p.rttEMAAlpha = cfg.Scoring.RTTEMAAlpha
 
 	// resolve primary
 	addr, err := net.ResolveUDPAddr("udp", cfg.Primary.Host)
@@ -87,11 +68,11 @@ func (p *Proxy) Listen() *net.UDPConn {
 // Mark primary as potentially failed - only mark DOWN after threshold reached
 func (p *Proxy) recordPrimaryFailure() {
 	count := p.primaryFailureCount.Add(1)
-	if count >= PrimaryFailureThreshold {
+	if count >= p.Cfg.Primary.FailureThreshold {
 		p.markPrimaryDown()
 		log.Printf("[WARN] primary DNS failed %d times, marking DOWN", count)
 	} else {
-		log.Printf("[DEBUG] primary DNS failure %d/%d", count, PrimaryFailureThreshold)
+		log.Printf("[DEBUG] primary DNS failure %d/%d", count, p.Cfg.Primary.FailureThreshold)
 	}
 }
 
@@ -103,12 +84,13 @@ func (p *Proxy) recordPrimarySuccess() {
 	}
 }
 
-func (p *Proxy) Run(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
+func (p *Proxy) HandleRequest(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
 	backendAddr := p.chooseBackendAddr()
 	isPrimary := backendAddr.String() == p.PrimaryAddr.String()
 
 	server, err := net.DialUDP("udp", nil, backendAddr)
 	if err != nil {
+		log.Println("dns connect:", err)
 		if isPrimary {
 			p.recordPrimaryFailure()
 		} else {
@@ -141,13 +123,13 @@ func (p *Proxy) Run(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
 	}
 
 	buf := make([]byte, ReadBufferSize)
-	_ = server.SetReadDeadline(time.Now().Add(ReadDeadline))
+	_ = server.SetReadDeadline(time.Now().Add(p.Cfg.ReadDeadline))
 	n, _, err := server.ReadFromUDP(buf)
 	rtt := time.Since(start)
 
 	if err != nil {
 		if err != io.EOF {
-			log.Println("read backend:", err)
+			log.Println("dns response:", err)
 		}
 		if isPrimary {
 			p.recordPrimaryFailure()
@@ -177,6 +159,6 @@ func (p *Proxy) Run(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
 
 	_, err = conn.WriteToUDP(buf[:n], client)
 	if err != nil {
-		log.Println("write client:", err)
+		log.Println("respond to client:", err)
 	}
 }

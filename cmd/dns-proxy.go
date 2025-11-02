@@ -3,27 +3,16 @@ package cmd
 import (
 	"context"
 	dnsproxy "dns-proxy/internal"
-	"flag"
+	"errors"
 	"log"
 	"net"
-	"os"
+	"time"
 )
 
+const ReadTimeout = 1 * time.Second // Check for shutdown every second
+
 func Execute(ctx context.Context) {
-	configPath := flag.String("config", "config.yaml", "Path to YAML config")
-	pidFile := flag.String("pid", "/var/run/dns-proxy.pid", "Path to PID file")
-	logFile := flag.String("log", "", "Path to log file (optional)")
-	flag.Parse()
-
-	if *logFile != "" {
-		f, err := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			log.Fatalf("Unable to open log file: %v", err)
-		}
-		log.SetOutput(f)
-	}
-
-	cfg := dnsproxy.LoadConfig(*configPath)
+	cfg, pidFile := dnsproxy.InitConfig()
 	if err := dnsproxy.CheckAndCreatePID(*pidFile); err != nil {
 		log.Fatalf("PID file error: %v", err)
 	}
@@ -45,17 +34,28 @@ func Execute(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Println("Received shutdown signal")
 			return
 		default:
 		}
 
+		// Set read deadline so we don't block forever
+		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
+
 		buf := make([]byte, dnsproxy.ReadBufferSize)
 		n, clientAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
+			// Check if it's a timeout error
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				// Timeout is expected, continue to check ctx.Done()
+				continue
+			}
+			// Other errors
 			log.Println("read client:", err)
 			continue
 		}
 
-		go proxy.Run(conn, buf[:n], clientAddr)
+		go proxy.HandleRequest(conn, buf[:n], clientAddr)
 	}
 }

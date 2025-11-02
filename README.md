@@ -55,27 +55,8 @@ GOOS=linux GOARCH=arm64 go build -o dns-proxy ./cmd/dns-proxy
 
 ## ⚙️ Конфигурация
 
-Пример config.yaml:
-```yaml
-listen: "0.0.0.0:53"
-
-primary:
-  host: "1.1.1.1:53"
-  down_ttl: "5m"
-
-fallback:
-  - host: "8.8.8.8:53"
-    initial_rtt: "40ms"
-  - host: "9.9.9.9:53"
-    initial_rtt: "35ms"
-
-scoring:
-  initial_rtt: "50ms"
-  penalty: 25
-  decay: 0.9
-  min_rtt: "5ms"
-  max_rtt: "900ms"
-```
+* Пример [config.yaml](config.yaml.example)
+* Прописка сервиса в Keenetic [/opt/etc/init.d/S99dnsproxy](keenetic/opt/etc/init.d/S99dnsproxy)
 
 ## ▶️ Запуск
 ```bash

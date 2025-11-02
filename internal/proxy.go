@@ -50,21 +50,6 @@ func NewProxy(cfg Config) *Proxy {
 	return p
 }
 
-func (p *Proxy) Listen() *net.UDPConn {
-	addr, err := net.ResolveUDPAddr("udp", p.Cfg.Listen)
-	if err != nil {
-		log.Fatal("resolve listen:", err)
-	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		log.Fatal("listen failed:", err)
-	}
-
-	log.Println("listening on", p.Cfg.Listen)
-
-	return conn
-}
-
 // Mark primary as potentially failed - only mark DOWN after threshold reached
 func (p *Proxy) recordPrimaryFailure() {
 	count := p.primaryFailureCount.Add(1)
@@ -84,7 +69,7 @@ func (p *Proxy) recordPrimarySuccess() {
 	}
 }
 
-func (p *Proxy) HandleRequest(conn *net.UDPConn, data []byte, client *net.UDPAddr) {
+func (p *Proxy) HandleRequest(conn net.PacketConn, data []byte, client net.Addr) {
 	backendAddr := p.chooseBackendAddr()
 	isPrimary := backendAddr.String() == p.PrimaryAddr.String()
 
@@ -157,7 +142,7 @@ func (p *Proxy) HandleRequest(conn *net.UDPConn, data []byte, client *net.UDPAdd
 		}
 	}
 
-	_, err = conn.WriteToUDP(buf[:n], client)
+	_, err = conn.WriteTo(buf[:n], client)
 	if err != nil {
 		log.Println("respond to client:", err)
 	}
